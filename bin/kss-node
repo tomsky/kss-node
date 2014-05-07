@@ -104,84 +104,66 @@ console.log(' * Template: ' + path.resolve(options.templateDirectory));
 console.log('');
 
 // Compile the Handlebars template
-template = fs.readFileSync(options.templateDirectory + '/index.html', 'utf8');
+template = fs.readFileSync(options.templateDirectory + '/index.hbs', 'utf8');
 template = handlebars.compile(template);
 
 // Create a new "styleguide" directory and copy the contents
-// of "public" over.
 try {
 	fs.mkdirSync(options.destinationDirectory);
 } catch (e) {}
 
-wrench.copyDirSyncRecursive(
-	options.templateDirectory + '/public',
-	options.destinationDirectory + '/public'
-);
-
 // Generate the static HTML pages in the next tick, i.e. after the other functions have
 // been defined and handlebars helpers set up.
 process.nextTick(function() {
-	console.log('...compiling KSS styles');
-	less.render('@import "' + path.relative(process.cwd(), options.destinationDirectory) + '/public/kss.less";', function(err, css) {
-		if (err) {
-			console.error(err);
-			throw err;
+
+	console.log('...parsing your styleguide');
+
+	kss.traverse(options.sourceDirectory, {
+		multiline : true,
+		markdown  : true,
+		markup    : true,
+		mask      : argv.mask || preCompiler.mask
+	}, function(err, sg) {
+		if (err) throw err
+
+		styleguide = sg;
+
+		var sections = styleguide.section('*.'),
+			i, sectionCount = sections.length,
+			sectionRoots = [], currentRoot,
+			rootCount, childSections = [],
+			pages = {};
+
+		console.log(sg.data.files.map(function(file) {
+			return ' - ' + file
+		}).join('\n'))
+
+		// Accumulate all of the sections' first indexes
+		// in case they don't have a root element.
+		for (i = 0; i < sectionCount; i += 1) {
+			currentRoot = sections[i].reference().match(/[0-9]*\.?/)[0].replace('.', '');
+
+			if (!~sectionRoots.indexOf(currentRoot)) {
+				sectionRoots.push(currentRoot);
+			}
 		}
 
-		css = cleanCss.process(css);
+		sectionRoots.sort();
+		rootCount = sectionRoots.length;
 
-		// Write the compiled LESS styles from the template.
-		fs.writeFileSync(options.destinationDirectory + '/public/kss.css', css, 'utf8');
+		// Now, group all of the sections by their root
+		// reference, and make a page for each.
+		for (i = 0; i < rootCount; i += 1) {
+			childSections = styleguide.section(sectionRoots[i]+'.*');
 
-		console.log('...parsing your styleguide');
+			generatePage(
+				styleguide, childSections,
+				sectionRoots[i], pages, sectionRoots
+			);
+		}
 
-		kss.traverse(options.sourceDirectory, {
-			multiline : true,
-			markdown  : true,
-			markup    : true,
-			mask      : argv.mask || preCompiler.mask
-		}, function(err, sg) {
-			if (err) throw err
-
-			styleguide = sg;
-
-			var sections = styleguide.section('*.'),
-				i, sectionCount = sections.length,
-				sectionRoots = [], currentRoot,
-				rootCount, childSections = [],
-				pages = {};
-
-			console.log(sg.data.files.map(function(file) {
-				return ' - ' + file
-			}).join('\n'))
-
-			// Accumulate all of the sections' first indexes
-			// in case they don't have a root element.
-			for (i = 0; i < sectionCount; i += 1) {
-				currentRoot = sections[i].reference().match(/[0-9]*\.?/)[0].replace('.', '');
-
-				if (!~sectionRoots.indexOf(currentRoot)) {
-					sectionRoots.push(currentRoot);
-				}
-			}
-
-			sectionRoots.sort();
-			rootCount = sectionRoots.length;
-
-			// Now, group all of the sections by their root
-			// reference, and make a page for each.
-			for (i = 0; i < rootCount; i += 1) {
-				childSections = styleguide.section(sectionRoots[i]+'.*');
-
-				generatePage(
-					styleguide, childSections,
-					sectionRoots[i], pages, sectionRoots
-				);
-			}
-
-			generateIndex(styleguide, childSections, pages, sectionRoots);
-			generateStylesheet(argv);
-		});
+		generateIndex(styleguide, childSections, pages, sectionRoots);
+		generateStylesheet(argv);
 	});
 });
 
@@ -242,10 +224,6 @@ generateStylesheet = function(argv) {
 // save its final buffer to a single CSS file.
 saveStylesheet = function(buffer) {
 	buffer = cleanCss.process(buffer.toString());
-	fs.writeFileSync(
-		options.destinationDirectory + '/public/style.css',
-		buffer, 'utf8'
-	);
 };
 
 // Renders the handlebars template for a section and saves it to a file.
